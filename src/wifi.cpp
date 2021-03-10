@@ -6,8 +6,9 @@
 boolean wifiConnect (const char *ssid, const char *passphrase){
 
   const time_t startTime = time(NULL);
-  const time_t timeoutSec = 10UL;
+  const time_t timeoutSec = 30UL;
 
+  WiFi.disconnect();
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, passphrase);
 
