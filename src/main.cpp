@@ -1,145 +1,96 @@
 #include <Arduino.h>
-#include <PubSubClient.h>
-#include <ESP8266WiFi.h>
 #include "../include/main.h"
 #include "../include/conf.h"
-
-const int LED_PIN = D4;
-const int CO2_ANALOG = A0;
-
-const char *wifiSsid = WIFI_SSID;
-const char *wifiPassphrase = WIFI_PASSPHRASE;
-
-IPAddress mqttIP(192, 168, 1, 2);
-uint16_t mqttPort = 1883;
-WiFiClient wifiClient;
-PubSubClient mqtt(wifiClient);
-
-const char *clientId = "GasSensor";
-const char *gasLevelTopic = "gas/level";
-const char *alertTopic = "gas/alert";
-
-void setAlertState (boolean state){
-  if (state){
-    digitalWrite(LED_PIN, LOW);
-  } else {
-    digitalWrite(LED_PIN, HIGH);
-  }
-}
-
-void callback(char *topic, byte *payload, unsigned int length){
-
-  const char *alertPayload = "event:alert";
-  const char *cleanPayload = "event:clean";
-
-  size_t stringPayloadSize = (length + 1) * sizeof(char);
-  char *stringPayload = (char *)malloc(stringPayloadSize);
-  
-  if (stringPayload == NULL){
-    Serial.println("[MQTT callback] Error while allocating memory for string payload.");
-    return;
-  }
-  
-  memset(stringPayload, 0, stringPayloadSize);
-  memcpy(stringPayload, payload, length);
-
-  Serial.print("Received \"");
-  Serial.print(stringPayload);
-  Serial.print("\" on topic ");
-  Serial.println(topic);
-
-  if (strcmp(topic, alertTopic) == 0){
-
-    if (strcmp(stringPayload, alertPayload) == 0){
-      setAlertState(true);
-    }
-
-    else if (strcmp(stringPayload, cleanPayload) == 0){
-      setAlertState(false);
-    }
-  }
-
-  free(stringPayload);
-}
-
-void connectWifi(){
-
-  Serial.print("[WiFi] Connecting to ");
-  Serial.println(wifiSsid);
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(wifiSsid, wifiPassphrase);
-
-  while (WiFi.status() != WL_CONNECTED){
-    delay(500);
-  }
-
-  Serial.println("[WiFi] Now connected.");
-  Serial.print("[WiFi] Our IP address is: ");
-  Serial.println(WiFi.localIP());
-}
-
-boolean connectMqtt(){
-
-  Serial.print("[MQTT] Connecting to ");
-  Serial.print(mqttIP);
-  Serial.print(":");
-  Serial.println(mqttPort);
-
-  if (!mqtt.connect(clientId)){
-    Serial.print("[MQTT] Failed to connect. State => ");
-    Serial.println(mqtt.state());
-  } else {
-    Serial.println("[MQTT] Now connected.");
-    mqtt.subscribe(alertTopic);
-  }
-
-  return mqtt.connected();
-}
-
-boolean publishGasLevel (float gasLevel){
-  
-  char co2LevelPayload[255];
-  sprintf(co2LevelPayload, "%f", gasLevel);
-
-  return mqtt.publish(gasLevelTopic, co2LevelPayload);
-}
+#include "../include/sensor.h"
+#include "../include/wifi.h"
+#include "../include/mqtt.h"
 
 void setup (){
-
   Serial.begin(9600);
-  pinMode(LED_PIN, OUTPUT);
-
-  setAlertState(false);
-
-  connectWifi();
-
-  mqtt.setServer(mqttIP, mqttPort);
-  mqtt.setCallback(callback);
-  
-  connectMqtt();
+  sensorInit();
+  Serial.println("");
 }
 
 void loop(){
 
-  float gasLevel = 0;
+  /* MQTT parameters */
+  IPAddress mqttIP;
+  mqttIP.fromString(MQTT_IP_ADDR);
+  uint16_t mqttPort = MQTT_PORT;
+  const char *mqttDeviceName = "GasSensor";
+  const char *mqttTopics[] = {
+    "jeedom/gas/alert"
+  };
+  const char *mqttGasLevelTopic = "jeedom/gas/level";
+
+  /* WiFi parameters */
+  const char *wifiSsid = WIFI_SSID;
+  const char *wifiPassphrase = WIFI_PASSPHRASE;
+
+  int gasLevel = 0;
+  char msg[1024];
+  char ip[255];
 
   delay(1000);
+
+  if (!wifiIsConnected()){
+    
+    Serial.println("[WiFi] Not connected to WiFi.");
+    sprintf(msg, "[WiFi] Connecting to %s...", wifiSsid);
+    Serial.println(msg);
+    
+    if (!wifiConnect(wifiSsid, wifiPassphrase)){
+      Serial.println("[WiFi] Could not connect to WiFi.");
+      return;
+    }
+
+    Serial.println("[WiFi] Now connected.");
+    wifiLocalIp(ip);
+    sprintf(msg, "[WiFi] Our IP address is: %s", ip);
+    Serial.println(msg);
+  }
   
-  if (!mqtt.connected()){
-    connectMqtt();
-    return;
+  if (!mqttIsConnected()){
+
+    Serial.println("[MQTT] Not connected.");
+    sprintf(msg, "[MQTT] Connecting to %s:%u...", mqttIP.toString().c_str(), (unsigned int)mqttPort);
+    Serial.println(msg);
+    
+    if (!mqttConnect(
+      mqttIP,
+      mqttPort,
+      mqttDeviceName, 
+      mqttTopics, 
+      sizeof(mqttTopics) / sizeof(const char *)
+    )){
+      sprintf(msg, "[MQTT] Failed to connect. State => %d", mqttState());
+      Serial.println(msg);
+      return;
+    }
+    Serial.println("[MQTT] Now connected.");
   }
 
-  mqtt.loop();
-
-  gasLevel = analogRead(CO2_ANALOG); 
+  gasLevel = sensorReadGasLevel(); 
  
-  Serial.print("Gas level => ");
-  Serial.println(gasLevel);
+  sprintf(msg, "[SENSOR] Gas level => %d", gasLevel);
+  Serial.println(msg);
 
-  if (!publishGasLevel(gasLevel)){
-    Serial.print("Error while publishing gas level. State => ");
-    Serial.println(mqtt.state());
+  if (!mqttPublishGasLevel(mqttGasLevelTopic, gasLevel)){
+    sprintf(
+      msg, 
+      "[MQTT] Error while publishing gas level to %s. State => %d", 
+      mqttGasLevelTopic,
+      mqttState()
+    );
+    Serial.println(msg);
+  }
+
+  if (!mqttLoop()){
+    sprintf(
+      msg, 
+      "[MQTT] Error while processing MQTT messages. State => %d", 
+      mqttState()
+    );
+    Serial.println(msg);
   }
 }
