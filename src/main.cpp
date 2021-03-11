@@ -15,7 +15,6 @@ void loop(){
 
   /* MQTT parameters */
   IPAddress mqttIP;
-  mqttIP.fromString(MQTT_IP_ADDR);
   uint16_t mqttPort = MQTT_PORT;
   const char *mqttDeviceName = "GasSensor";
   const char *mqttTopics[] = {
@@ -51,6 +50,11 @@ void loop(){
   }
   
   if (!mqttIsConnected()){
+
+    if (!mqttIP.fromString(MQTT_IP_ADDR)){
+      Serial.println("[MQTT] Could not translate MQTT_IP_ADDR to a valid IP address.");
+      return;
+    }
 
     Serial.println("[MQTT] Not connected.");
     sprintf(msg, "[MQTT] Connecting to %s:%u...", mqttIP.toString().c_str(), (unsigned int)mqttPort);

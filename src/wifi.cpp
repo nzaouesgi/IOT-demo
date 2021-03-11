@@ -9,7 +9,6 @@ boolean wifiConnect (const char *ssid, const char *passphrase){
   const time_t timeoutSec = 30UL;
 
   WiFi.disconnect();
-  WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, passphrase);
 
   while (!wifiIsConnected()){
